@@ -1,4 +1,4 @@
-# Price Parser — многопоточный парсер цен на книги
+# Price Parser - многопоточный парсер цен на книги
 
 Итоговое задание вариант 2: парсер цен на товары.
 
@@ -10,8 +10,8 @@
 
 - Java 21, Spring Boot 4.1.1 (Spring MVC, Spring Data JPA, Validation)
 - H2 (in-memory) + H2 Console
-- RestTemplate — загрузка страниц, Jsoup — разбор HTML
-- JUnit 5, Mockito, MockMvc — тесты
+- RestTemplate - загрузка страниц, Jsoup - разбор HTML
+- JUnit 5, Mockito, MockMvc - тесты
 - Maven (через Maven Wrapper, отдельная установка Maven не нужна)
 
 ## Требования
@@ -30,6 +30,18 @@
 Для Windows: `mvnw.cmd spring-boot:run`.
 
 ## Сценарий проверки
+
+### Через веб-интерфейс
+
+После запуска открыть в браузере http://localhost:8080:
+
+1. В разделе «Запуск сбора данных» уже подставлены примеры ссылок - нажать «Запустить». Ссылка на сам сайт books.toscrape.com есть в начале страницы.
+2. Под кнопкой раз в секунду обновляется строка со статусом задачи и счётчиками: найдено, сохранено, ошибок.
+3. Когда задача перейдёт в `DONE`, таблица «Результаты» обновится автоматически. В ней можно фильтровать товары по названию и цене, менять сортировку и листать страницы.
+
+Интерфейс работает через тот же REST API, что описан ниже.
+
+### Через REST API
 
 ### 1. Запустить сбор данных
 
@@ -50,7 +62,7 @@ curl -X POST http://localhost:8080/api/tasks \
   -d '{"urls": ["https://books.toscrape.com/catalogue/category/books/mystery_3/index.html", "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html"]}'
 ```
 
-Можно передавать как ссылки на отдельные товары, так и ссылки на страницы каталога или категории — в этом случае сервис сам соберёт ссылки на товары, переходя по страницам пагинации (не больше `parser.max-catalog-pages` страниц на одну ссылку). Принимаются только ссылки на `https://books.toscrape.com/`, иначе вернётся `400 Bad Request`.
+Можно передавать как ссылки на отдельные товары, так и ссылки на страницы каталога или категории - в этом случае сервис сам соберёт ссылки на товары, переходя по страницам пагинации (не больше `parser.max-catalog-pages` страниц на одну ссылку). Принимаются только ссылки на `https://books.toscrape.com/`, иначе вернётся `400 Bad Request`.
 
 Ответ `202 Accepted` приходит сразу, обработка идёт в фоне:
 
@@ -89,9 +101,9 @@ curl "http://localhost:8080/answer?title=the&minPrice=20&maxPrice=40&sortBy=TITL
 
 | Параметр    | Описание                                           | По умолчанию   |
 |-------------|----------------------------------------------------|----------------|
-| `title`     | подстрока в названии (без учёта регистра)          | —              |
-| `minPrice`  | минимальная цена                                   | —              |
-| `maxPrice`  | максимальная цена                                  | —              |
+| `title`     | подстрока в названии (без учёта регистра)          | нет            |
+| `minPrice`  | минимальная цена                                   | нет            |
+| `maxPrice`  | максимальная цена                                  | нет            |
 | `sortBy`    | поле сортировки: `PRICE`, `TITLE`, `COLLECTED_AT`  | `COLLECTED_AT` |
 | `direction` | направление: `ASC`, `DESC`                         | `DESC`         |
 | `page`      | номер страницы, с 0                                | `0`            |
@@ -126,26 +138,26 @@ H2 Console: http://localhost:8080/h2-console
 - User Name: `sa`
 - Password: пустой
 
-Таблица с товарами — `PRODUCTS`.
+Таблица с товарами - `PRODUCTS`.
 
 ### 5. Посмотреть лог
 
-События приложения (запуск и завершение задач, обход страниц каталога, ошибки, плановые обновления) пишутся в консоль и в файл `logs/parser.log` — в каждой строке указан поток, в котором произошло событие.
+События приложения (запуск и завершение задач, обход страниц каталога, ошибки, плановые обновления) пишутся в консоль и в файл `logs/parser.log` - в каждой строке указан поток, в котором произошло событие.
 
 ## Многопоточность
 
 | Требование                                  | Где реализовано                                                                                                                                                                  |
 |---------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Простые потоки (`Thread`, `Runnable`)        | `CrawlService` — для каждой задачи создаётся отдельный поток-производитель `new Thread(job::produce, "crawl-producer-N")`                                                         |
-| Кастомный `ExecutorService`                  | `ParserConfig.parserExecutor` — фиксированный пул потоков `parser-worker-N`, в нём работают потоки-потребители и плановое обновление цен                                         |
-| Планировщик                                  | `PriceRefreshScheduler` — `ScheduledExecutorService` раз в `parser.refresh-interval` заново загружает все сохранённые товары и обновляет цены (`invokeAll` на пуле воркеров)     |
-| Блокирующие структуры                        | `CrawlJob` — схема producer–consumer на `LinkedBlockingQueue`: производитель кладёт ссылки на товары (`put`), потребители забирают (`take`); остановка через poison pill        |
+| Простые потоки (`Thread`, `Runnable`)        | `CrawlService` - для каждой задачи создаётся отдельный поток-производитель `new Thread(job::produce, "crawl-producer-N")`                                                         |
+| Кастомный `ExecutorService`                  | `ParserConfig.parserExecutor` - фиксированный пул потоков `parser-worker-N`, в нём работают потоки-потребители и плановое обновление цен                                         |
+| Планировщик                                  | `PriceRefreshScheduler` - `ScheduledExecutorService` раз в `parser.refresh-interval` заново загружает все сохранённые товары и обновляет цены (`invokeAll` на пуле воркеров)     |
+| Блокирующие структуры                        | `CrawlJob` - схема producer-consumer на `LinkedBlockingQueue`: производитель кладёт ссылки на товары (`put`), потребители забирают (`take`); остановка через poison pill        |
 | Примитивы синхронизации                      | `CountDownLatch` (производитель ждёт завершения всех потребителей), `ReentrantLock` в `ProductStorage` (защита от дублей при одновременном сохранении), `AtomicInteger`/`AtomicLong`, `volatile` |
 | Потокобезопасные структуры данных            | `ConcurrentHashMap` (реестр задач), `LinkedBlockingQueue`, атомарные счётчики в `CrawlTask`                                                                                      |
-| Демон-поток (логирование)                    | `ActivityLog` — демон-поток `activity-log-writer` забирает строки из `BlockingQueue` и пишет их в `logs/parser.log`                                                               |
+| Демон-поток (логирование)                    | `ActivityLog` - демон-поток `activity-log-writer` забирает строки из `BlockingQueue` и пишет их в `logs/parser.log`                                                               |
 | Встроенное хранилище H2                      | `Product` + `ProductRepository` (Spring Data JPA)                                                                                                                                 |
-| Фильтрация через Parallel Stream             | `ProductQueryService` — фильтрация и сортировка результатов из H2 через `parallelStream()`                                                                                       |
-| Межсервисное взаимодействие                  | `PageFetcher` — HTTP-запросы к books.toscrape.com через `RestTemplate` с таймаутами                                                                                              |
+| Фильтрация через Parallel Stream             | `ProductQueryService` - фильтрация и сортировка результатов из H2 через `parallelStream()`                                                                                       |
+| Межсервисное взаимодействие                  | `PageFetcher` - HTTP-запросы к books.toscrape.com через `RestTemplate` с таймаутами                                                                                              |
 
 ### Как обрабатывается задача
 
@@ -176,7 +188,7 @@ H2 Console: http://localhost:8080/h2-console
 ./mvnw test
 ```
 
-- `BookPageParserTest` — разбор страниц товара и каталога, преобразование относительных ссылок, определение последней страницы
-- `ProductQueryServiceTest` — фильтрация, сортировка и пагинация результатов
-- `TaskControllerTest` — REST API задач: `202`, `400` для чужих ссылок, `404` для несуществующей задачи
-- `PriceParserApplicationTests` — поднятие контекста приложения
+- `BookPageParserTest` - разбор страниц товара и каталога, преобразование относительных ссылок, определение последней страницы
+- `ProductQueryServiceTest` - фильтрация, сортировка и пагинация результатов
+- `TaskControllerTest` - REST API задач: `202`, `400` для чужих ссылок, `404` для несуществующей задачи
+- `PriceParserApplicationTests` - поднятие контекста приложения

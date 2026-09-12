@@ -40,7 +40,7 @@ public class PageFetcher {
 				return download(url);
 			} catch (ResourceAccessException exception) {
 				activityLog.log("Попытка " + attempt + " из " + maxAttempts + " не удалась для " + url
-						+ " — " + exception.getMessage());
+						+ ": " + exception.getMessage());
 			}
 		}
 		return download(url);

@@ -77,7 +77,7 @@ public class PriceRefreshScheduler {
 			productProcessor.process(productUrl);
 			return true;
 		} catch (IOException | RuntimeException exception) {
-			activityLog.log("Не удалось обновить " + productUrl + " — " + exception.getMessage());
+			activityLog.log("Не удалось обновить " + productUrl + ": " + exception.getMessage());
 			return false;
 		}
 	}

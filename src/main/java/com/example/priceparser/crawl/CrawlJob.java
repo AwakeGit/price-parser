@@ -105,7 +105,7 @@ class CrawlJob {
 		} catch (IOException | RuntimeException exception) {
 			task.incrementFailed();
 			activityLog.log("Задача " + task.getId() + ": не удалось загрузить каталог " + pageUrl
-					+ " — " + exception.getMessage());
+					+ ": " + exception.getMessage());
 			return Optional.empty();
 		}
 	}
@@ -130,7 +130,7 @@ class CrawlJob {
 		} catch (IOException | RuntimeException exception) {
 			task.incrementFailed();
 			activityLog.log("Задача " + task.getId() + ": ошибка обработки " + productUrl
-					+ " — " + exception.getMessage());
+					+ ": " + exception.getMessage());
 		}
 	}
 

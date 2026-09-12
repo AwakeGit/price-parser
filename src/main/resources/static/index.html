@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ru">
+<head>
+	<meta charset="utf-8">
+	<title>Price Parser</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 20px; }
+		textarea { width: 700px; max-width: 100%; height: 60px; }
+		table { border-collapse: collapse; margin-top: 10px; }
+		th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
+		td.description { max-width: 500px; }
+		.error { color: red; }
+	</style>
+</head>
+<body>
+<h1>Price Parser</h1>
+<p>
+	Парсер цен на книги с сайта
+	<a href="https://books.toscrape.com/" target="_blank" rel="noopener">books.toscrape.com</a>
+</p>
+
+<h2>Запуск сбора данных</h2>
+<p>Ссылки на товары или страницы каталога, по одной в строке:</p>
+<textarea id="urls">https://books.toscrape.com/catalogue/category/books/mystery_3/index.html
+https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html</textarea>
+<br>
+<button id="start-button">Запустить</button>
+<p id="start-message" class="error"></p>
+<p id="task-info"></p>
+
+<h2>Результаты</h2>
+<form id="filter-form">
+	Название: <input id="filter-title">
+	Цена от: <input id="filter-min-price" type="number" min="0" step="0.01" size="6">
+	до: <input id="filter-max-price" type="number" min="0" step="0.01" size="6">
+	Сортировка:
+	<select id="filter-sort-by">
+		<option value="COLLECTED_AT">дата сбора</option>
+		<option value="PRICE">цена</option>
+		<option value="TITLE">название</option>
+	</select>
+	<select id="filter-direction">
+		<option value="DESC">по убыванию</option>
+		<option value="ASC">по возрастанию</option>
+	</select>
+	На странице:
+	<select id="filter-size">
+		<option value="10">10</option>
+		<option value="20" selected>20</option>
+		<option value="50">50</option>
+	</select>
+	<button type="submit">Показать</button>
+</form>
+<p id="results-message" class="error"></p>
+<table>
+	<thead>
+	<tr><th>#</th><th>Название</th><th>Цена</th><th>Описание</th><th>Дата сбора</th></tr>
+	</thead>
+	<tbody id="results-body"></tbody>
+</table>
+<p>
+	<button id="prev-page">Назад</button>
+	<span id="page-info"></span>
+	<button id="next-page">Вперёд</button>
+</p>
+
+<script>
+	const POLL_INTERVAL_MS = 1000;
+	const STATUS_DONE = "DONE";
+	const PRICE_CURRENCY = "£";
+	const FIRST_PAGE = 0;
+	const DESCRIPTION_PREVIEW_LENGTH = 200;
+	const TABLE_COLUMN_COUNT = 5;
+
+	const state = { page: FIRST_PAGE, pollTimer: null };
+
+	const byId = (id) => document.getElementById(id);
+
+	async function startTask() {
+		const urls = byId("urls").value.split("\n").map((url) => url.trim()).filter((url) => url.length > 0);
+		byId("start-message").textContent = "";
+		byId("start-button").disabled = true;
+		try {
+			const response = await fetch("/api/tasks", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ urls })
+			});
+			if (!response.ok) {
+				throw new Error(`Ошибка ${response.status}: ссылки должны вести на https://books.toscrape.com/`);
+			}
+			const task = await response.json();
+			renderTask(task);
+			pollTask(task.id);
+		} catch (error) {
+			byId("start-message").textContent = error.message;
+			byId("start-button").disabled = false;
+		}
+	}
+
+	function pollTask(taskId) {
+		clearInterval(state.pollTimer);
+		state.pollTimer = setInterval(async () => {
+			const response = await fetch(`/api/tasks/${taskId}`);
+			const task = await response.json();
+			renderTask(task);
+			if (task.status === STATUS_DONE) {
+				clearInterval(state.pollTimer);
+				byId("start-button").disabled = false;
+				loadResults(FIRST_PAGE);
+			}
+		}, POLL_INTERVAL_MS);
+	}
+
+	function renderTask(task) {
+		byId("task-info").textContent = `Задача №${task.id}: ${task.status}. `
+			+ `Найдено: ${task.found}, сохранено: ${task.saved}, ошибок: ${task.failed}`;
+	}
+
+	function buildQuery(page) {
+		const params = new URLSearchParams({
+			sortBy: byId("filter-sort-by").value,
+			direction: byId("filter-direction").value,
+			size: byId("filter-size").value,
+			page
+		});
+		const optionalFilters = {
+			title: byId("filter-title").value.trim(),
+			minPrice: byId("filter-min-price").value,
+			maxPrice: byId("filter-max-price").value
+		};
+		Object.entries(optionalFilters)
+			.filter(([, value]) => value !== "")
+			.forEach(([name, value]) => params.set(name, value));
+		return params;
+	}
+
+	async function loadResults(page) {
+		byId("results-message").textContent = "";
+		try {
+			const response = await fetch(`/answer?${buildQuery(page)}`);
+			if (!response.ok) {
+				throw new Error(`Ошибка ${response.status}: проверьте значения фильтров`);
+			}
+			const result = await response.json();
+			state.page = result.page;
+			renderResults(result);
+		} catch (error) {
+			byId("results-message").textContent = error.message;
+		}
+	}
+
+	function renderResults(result) {
+		const body = byId("results-body");
+		body.replaceChildren();
+		if (result.items.length === 0) {
+			const cell = body.insertRow().insertCell();
+			cell.colSpan = TABLE_COLUMN_COUNT;
+			cell.textContent = "Нет данных";
+		}
+		result.items.forEach((product, index) => body.appendChild(buildProductRow(product, result.page * result.size + index + 1)));
+		byId("page-info").textContent = `Страница ${result.page + 1} из ${Math.max(result.totalPages, 1)}, всего товаров: ${result.totalElements}`;
+		byId("prev-page").disabled = result.page <= FIRST_PAGE;
+		byId("next-page").disabled = result.page + 1 >= result.totalPages;
+	}
+
+	function buildProductRow(product, number) {
+		const row = document.createElement("tr");
+		row.insertCell().textContent = number;
+		const link = document.createElement("a");
+		link.href = product.url;
+		link.target = "_blank";
+		link.rel = "noopener";
+		link.textContent = product.title;
+		row.insertCell().appendChild(link);
+		row.insertCell().textContent = `${PRICE_CURRENCY}${Number(product.price).toFixed(2)}`;
+		const descriptionCell = row.insertCell();
+		descriptionCell.className = "description";
+		descriptionCell.title = product.description;
+		descriptionCell.textContent = shorten(product.description);
+		row.insertCell().textContent = new Date(product.collectedAt).toLocaleString("ru-RU");
+		return row;
+	}
+
+	function shorten(text) {
+		return text.length > DESCRIPTION_PREVIEW_LENGTH ? `${text.slice(0, DESCRIPTION_PREVIEW_LENGTH)}...` : text;
+	}
+
+	byId("start-button").addEventListener("click", startTask);
+	byId("filter-form").addEventListener("submit", (event) => {
+		event.preventDefault();
+		loadResults(FIRST_PAGE);
+	});
+	byId("prev-page").addEventListener("click", () => loadResults(state.page - 1));
+	byId("next-page").addEventListener("click", () => loadResults(state.page + 1));
+
+	loadResults(FIRST_PAGE);
+</script>
+</body>
+</html>
