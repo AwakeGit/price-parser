@@ -49,7 +49,7 @@ class CrawlJob {
 	void produce() {
 		try {
 			for (String sourceUrl : task.getSourceUrls()) {
-				enqueueSource(sourceUrl);
+				enqueueSourceSafely(sourceUrl);
 			}
 			stopConsumers();
 			consumersFinished.await();
@@ -73,6 +73,16 @@ class CrawlJob {
 			Thread.currentThread().interrupt();
 		} finally {
 			consumersFinished.countDown();
+		}
+	}
+
+	private void enqueueSourceSafely(String sourceUrl) throws InterruptedException {
+		try {
+			enqueueSource(sourceUrl);
+		} catch (RuntimeException exception) {
+			task.incrementFailed();
+			activityLog.log("Задача " + task.getId() + ": не удалось обойти ссылку " + sourceUrl
+					+ ": " + exception.getMessage());
 		}
 	}
 
