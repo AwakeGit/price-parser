@@ -17,8 +17,9 @@ public class ProductQueryService {
 	}
 
 	public PageResponse<ProductResponse> find(ProductFilter filter) {
+		String normalizedTitle = normalizeTitle(filter.title());
 		List<ProductResponse> matchedProducts = repository.findAll().parallelStream()
-				.filter(product -> matchesTitle(product, filter))
+				.filter(product -> matchesTitle(product, normalizedTitle))
 				.filter(product -> matchesPrice(product, filter))
 				.sorted(buildComparator(filter))
 				.map(ProductResponse::from)
@@ -26,11 +27,18 @@ public class ProductQueryService {
 		return PageResponse.of(matchedProducts, filter.page(), filter.size());
 	}
 
-	private boolean matchesTitle(Product product, ProductFilter filter) {
-		if (filter.title() == null || filter.title().isBlank()) {
+	private String normalizeTitle(String title) {
+		if (title == null || title.isBlank()) {
+			return null;
+		}
+		return title.toLowerCase(Locale.ROOT);
+	}
+
+	private boolean matchesTitle(Product product, String normalizedTitle) {
+		if (normalizedTitle == null) {
 			return true;
 		}
-		return product.getTitle().toLowerCase(Locale.ROOT).contains(filter.title().toLowerCase(Locale.ROOT));
+		return product.getTitle().toLowerCase(Locale.ROOT).contains(normalizedTitle);
 	}
 
 	private boolean matchesPrice(Product product, ProductFilter filter) {

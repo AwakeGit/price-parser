@@ -9,6 +9,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.stereotype.Service;
 
+import io.opentelemetry.context.Context;
+
 import com.example.priceparser.client.PageFetcher;
 import com.example.priceparser.config.ParserProperties;
 import com.example.priceparser.logging.ActivityLog;
@@ -37,10 +39,11 @@ public class CrawlService {
 		CrawlTask task = new CrawlTask(taskIdSequence.incrementAndGet(), sourceUrls);
 		tasks.put(task.getId(), task);
 		CrawlJob job = new CrawlJob(task, dependencies);
+		Context context = Context.current();
 		for (int consumer = 0; consumer < job.consumerCount(); consumer++) {
-			parserExecutor.submit(job::consume);
+			parserExecutor.submit(context.wrap(job::consume));
 		}
-		Thread producer = new Thread(job::produce, PRODUCER_THREAD_PREFIX + task.getId());
+		Thread producer = new Thread(context.wrap(job::produce), PRODUCER_THREAD_PREFIX + task.getId());
 		producer.start();
 		activityLog.log("Задача " + task.getId() + " запущена для " + sourceUrls.size() + " ссылок");
 		return task;

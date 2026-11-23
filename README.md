@@ -11,12 +11,20 @@
 - Java 21, Spring Boot 4.1.1 (Spring MVC, Spring Data JPA, Validation)
 - H2 (in-memory) + H2 Console
 - RestTemplate - загрузка страниц, Jsoup - разбор HTML
+- Spring Boot Actuator, Micrometer, Prometheus, Grafana - метрики и мониторинг
+- JMH - микробенчмарки обработки коллекций
+- JMeter - нагрузочное тестирование REST API
+- VisualVM, JFR, jcmd - профилирование JVM, дампы и анализ GC
+- OpenTelemetry Java Agent, Jaeger - распределённый трейсинг
 - JUnit 5, Mockito, MockMvc - тесты
 - Maven (через Maven Wrapper, отдельная установка Maven не нужна)
 
 ## Требования
 
 - JDK 21
+- Docker с Docker Compose для Prometheus и Grafana
+- JMeter 5.6.3 для нагрузочного тестирования
+- VisualVM 2.2.2 для профилирования JVM
 - Доступ в интернет (страницы загружаются с https://books.toscrape.com)
 
 ## Запуск
@@ -28,6 +36,20 @@
 ```
 
 Для Windows: `mvnw.cmd spring-boot:run`.
+
+Для запуска мониторинга:
+
+```bash
+docker compose up -d
+```
+
+- Grafana: http://localhost:3000, дашборд `Price Parser: производительность` в папке `Price Parser`.
+- Prometheus: http://localhost:9090.
+- Jaeger: http://localhost:16686.
+- Метрики приложения: http://localhost:8080/actuator/prometheus.
+- Состояние приложения: http://localhost:8080/actuator/health.
+
+Grafana доступна анонимно с правами чтения. Остановить мониторинг можно командой `docker compose down`.
 
 ## Сценарий проверки
 
@@ -203,7 +225,7 @@ H2 (таблица PRODUCTS)
 | Кастомный `ExecutorService`                  | `ParserConfig.parserExecutor` - фиксированный пул потоков `parser-worker-N`, в нём работают потоки-потребители и плановое обновление цен                                         |
 | Планировщик                                  | `PriceRefreshScheduler` - `ScheduledExecutorService` раз в `parser.refresh-interval` заново загружает все сохранённые товары и обновляет цены (`invokeAll` на пуле воркеров)     |
 | Блокирующие структуры                        | `CrawlJob` - схема producer-consumer на `LinkedBlockingQueue`: производитель кладёт ссылки на товары (`put`), потребители забирают (`take`); остановка через poison pill        |
-| Примитивы синхронизации                      | `CountDownLatch` (производитель ждёт завершения всех потребителей), `ReentrantLock` в `ProductStorage` (защита от дублей при одновременном сохранении), `AtomicInteger`/`AtomicLong`, `volatile` |
+| Примитивы синхронизации                      | `CountDownLatch` (производитель ждёт завершения всех потребителей), `ReentrantLock` в `ProductProcessor` (защита от дублей на всём участке сохранения, включая commit), `AtomicInteger`/`AtomicLong`, `volatile` |
 | Потокобезопасные структуры данных            | `ConcurrentHashMap` (реестр задач), `LinkedBlockingQueue`, атомарные счётчики в `CrawlTask`                                                                                      |
 | Демон-поток (логирование)                    | `ActivityLog` - демон-поток `activity-log-writer` забирает строки из `BlockingQueue` и пишет их в `logs/parser.log`                                                               |
 | Встроенное хранилище H2                      | `Product` + `ProductRepository` (Spring Data JPA)                                                                                                                                 |
@@ -241,6 +263,166 @@ H2 (таблица PRODUCTS)
 
 - `BookPageParserTest` - разбор страниц товара и каталога, преобразование относительных ссылок, определение последней страницы
 - `ProductQueryServiceTest` - фильтрация, сортировка и пагинация результатов
+- `ProductProcessorTest` - параллельная обработка одного URL без дублей и ошибок уникального индекса
 - `TaskControllerTest` - REST API задач: `202`, `400` для чужих ссылок, `404` для несуществующей задачи
 - `CrawlJobTest` - задача завершается, даже если обработка одной из входных ссылок упала с исключением
 - `PriceParserApplicationTests` - поднятие контекста приложения
+
+## JMH
+
+`ProductQueryBenchmark` сравнивает `for`, `stream()` и `parallelStream()` на наборах из 1 000, 10 000 и 100 000 товаров. Во всех вариантах выполняются одинаковые фильтрация по названию и цене, сортировка по цене и преобразование в `ProductResponse`. Отдельный вариант `parallelStreamPrecomputedTitle` измеряет оптимизацию, при которой условие поиска переводится в нижний регистр один раз на запрос, а не для каждого товара.
+
+```bash
+./mvnw test-compile exec:exec
+```
+
+Результаты в формате JSON сохраняются в `target/jmh-results.json`.
+
+Результаты запуска на JDK 21.0.8, JMH 1.37, режим `avgt`, мс/операция:
+
+| Количество товаров | `for` | `stream()` | `parallelStream()` |
+|--------------------|-------|------------|--------------------|
+| 1 000 | 0,034 ± 0,001 | 0,034 ± 0,002 | 0,090 ± 0,011 |
+| 10 000 | 0,357 ± 0,078 | 0,330 ± 0,029 | 0,241 ± 0,041 |
+| 100 000 | 4,915 ± 0,185 | 3,836 ± 0,035 | 1,560 ± 0,118 |
+
+На 1 000 товаров `parallelStream()` оказался медленнее последовательных вариантов. На 10 000 и 100 000 товаров он показал меньшее среднее время. Погрешность указана для доверительного интервала 99,9%; каждая конфигурация выполнялась с тремя итерациями прогрева и пятью итерациями измерения в одной forked JVM.
+
+## JMeter
+
+Тест-план `jmeter/price-parser-baseline.jmx` запускает две группы пользователей:
+
+- 20 пользователей выполняют по 25 GET-запросов к `/answer`, всего 500 запросов;
+- 5 пользователей выполняют по 2 POST-запроса к `/api/tasks`, всего 10 запросов.
+
+Перед запуском необходимо запустить приложение. Команда нагрузочного теста:
+
+```bash
+rm -rf build/jmeter && mkdir -p build/jmeter
+jmeter -n -t jmeter/price-parser-baseline.jmx \
+  -l build/jmeter/results.csv \
+  -j build/jmeter/jmeter.log \
+  -e -o build/jmeter/report
+```
+
+HTML-отчёт создаётся в `build/jmeter/report/index.html`.
+
+Базовые результаты на JDK 21.0.8, JMeter 5.6.3:
+
+| Запрос | Количество | Throughput, запросов/с | Среднее, мс | p95, мс | p99, мс | Ошибки |
+|--------|------------|------------------------|-------------|---------|---------|--------|
+| `GET /answer` | 500 | 105,49 | 2,126 | 4 | 10,99 | 0% |
+| `POST /api/tasks` | 10 | 6,39 | 9,9 | 71 | 71 | 0% |
+
+`POST /api/tasks` возвращает `202 Accepted` после постановки задачи, поэтому его HTTP latency не включает полное время парсинга. Micrometer зафиксировал 10 успешных обработок товара без ошибок; суммарное время обработки составило 7,241 секунды, в среднем 0,724 секунды на товар с учётом внешнего HTTP-запроса.
+
+## VisualVM и диагностика JVM
+
+Для записи событий GC приложение запускается командой:
+
+```bash
+mkdir -p build/visualvm
+./mvnw spring-boot:run \
+  -Dspring-boot.run.jvmArguments="-Xlog:gc*:file=build/visualvm/gc.log:time,uptime,level,tags"
+```
+
+VisualVM открывается через `open -a VisualVM` в macOS и автоматически обнаруживает локальный процесс `PriceParserApplication`. PID процесса можно найти через `jcmd -l`.
+
+Примеры команд диагностики:
+
+```bash
+jcmd <PID> JFR.start name=price-parser-load settings=profile \
+  filename=build/visualvm/price-parser-load.jfr
+jcmd <PID> Thread.print -l > build/visualvm/thread-dump.txt
+jcmd <PID> JFR.stop name=price-parser-load
+jcmd <PID> GC.heap_info > build/visualvm/heap-info.txt
+jcmd <PID> GC.class_histogram > build/visualvm/class-histogram.txt
+jcmd <PID> GC.heap_dump -gz=1 build/visualvm/price-parser-heap.hprof.gz
+```
+
+Heap dump открывается в VisualVM через `File -> Load`. JFR-запись анализируется командой `jfr view hot-methods build/visualvm/price-parser-load.jfr`; также доступны views `allocation-by-site`, `contention-by-site` и `gc-pauses`.
+
+Результаты после трёх запусков JMeter, всего 1 530 HTTP-запросов без ошибок:
+
+- JFR зафиксировал 19 пауз GC: средняя 4,22 мс, p95 13,5 мс, максимум 13,5 мс.
+- Выраженного CPU hotspot не обнаружено: наибольшее число samples получило `StringLatin1.inflate`: 7,41%; остальные методы распределены между сериализацией метрик, строками и инфраструктурным кодом.
+- События contention в JFR отсутствуют.
+- Во время нагрузки четыре `parser-worker` находились в `RUNNABLE`; потоки `crawl-producer` ожидали `CountDownLatch`. Deadlock не обнаружен.
+- До heap dump было занято 64,4 МБ heap. В histogram больше всего памяти занимали byte arrays: 11,1 МБ, `java.lang.Class`: 2,53 МБ и `String`: 2,37 МБ.
+- Full GC при диагностике вызывался командами `GC.class_histogram` и `GC.heap_dump`; эти паузы не относятся к обычной нагрузке приложения.
+
+Снимок VisualVM, GC-лог, JFR-запись, thread dump, heap dump и текстовые сводки сохраняются в `build/visualvm/`.
+
+## Оптимизация производительности и корректности
+
+Внесённые изменения:
+
+- `ProductQueryService` переводит условие поиска в нижний регистр один раз на запрос. Раньше `filter.title().toLowerCase(Locale.ROOT)` вызывался для каждого товара.
+- `ProductStorage.save` выполняет чтение и обновление товара в одной `@Transactional`; `findAllUrls` использует `@Transactional(readOnly = true)`.
+- После добавления транзакции JMeter выявил гонку: блокировка в `ProductStorage` освобождалась до commit, и параллельная вставка одинакового URL вызывала ошибку уникального индекса. `ReentrantLock` перенесён в `ProductProcessor`, поэтому блокировка теперь охватывает вызов транзакционного метода и commit.
+- N+1-запросы не обнаружены: у `Product` нет связей с другими сущностями. Уникальное ограничение `URL` уже создаёт индекс. Дополнительные индексы не добавлялись, поскольку фильтрация выполняется в памяти и не использует их.
+- Блокировка сохранена: JFR не показал contention, а тест доказал необходимость синхронизации вокруг полного сохранения.
+
+JMH, сравнение в одном запуске, мс/операция:
+
+| Количество товаров | До: `parallelStream` | После: `parallelStreamPrecomputedTitle` |
+|--------------------|----------------------|------------------------------------------|
+| 1 000 | 0,087 ± 0,001 | 0,086 ± 0,003 |
+| 10 000 | 0,222 ± 0,002 | 0,212 ± 0,002 |
+| 100 000 | 1,521 ± 0,019 | 1,506 ± 0,016 |
+
+На 10 000 товаров среднее время снизилось примерно на 4,5%. На 100 000 разница около 1%, а доверительные интервалы пересекаются, поэтому ускорение на этом размере не подтверждено.
+
+Повторный JMeter после исправлений:
+
+| Метрика `GET /answer` | До | После |
+|-----------------------|----|-------|
+| Запросов | 500 | 500 |
+| Throughput, запросов/с | 105,49 | 104,71 |
+| Среднее время, мс | 2,126 | 2,910 |
+| p95, мс | 4 | 5 |
+| HTTP-ошибки | 0% | 0% |
+
+HTTP-ускорение не обнаружено: в тесте в базе находится один товар, а основное время занимают HTTP и инфраструктура приложения. После исправления гонки все 10 фоновых парсингов завершились успешно, ошибок уникального индекса нет. HTML-отчёт итогового запуска сохранён в `build/jmeter-fixed/report/index.html`. Регрессионный `ProductProcessorTest` запускает 10 параллельных сохранений одного URL и проверяет, что в базе остаётся одна запись.
+
+## OpenTelemetry и Jaeger
+
+В `compose.yaml` добавлен Jaeger 2.23.0 с OTLP HTTP-приёмником на порту 4318 и UI на порту 16686. Для автоматической инструментации используется OpenTelemetry Java Agent 2.34.0.
+
+Скачивание агента:
+
+```bash
+mkdir -p build/telemetry
+curl --fail --location \
+  https://repo.maven.apache.org/maven2/io/opentelemetry/javaagent/opentelemetry-javaagent/2.34.0/opentelemetry-javaagent-2.34.0.jar \
+  --output build/telemetry/opentelemetry-javaagent.jar
+```
+
+Запуск инфраструктуры и приложения с трейсингом:
+
+```bash
+docker compose up -d
+./mvnw spring-boot:run \
+  -Dspring-boot.run.jvmArguments="-javaagent:build/telemetry/opentelemetry-javaagent.jar -Dotel.service.name=price-parser -Dotel.traces.exporter=otlp -Dotel.exporter.otlp.protocol=http/protobuf -Dotel.exporter.otlp.endpoint=http://localhost:4318 -Dotel.metrics.exporter=none -Dotel.logs.exporter=none"
+```
+
+Метрики и логи Java Agent отключены, потому что метрики уже собираются через Micrometer/Prometheus, а логи записываются через `ActivityLog`. Jaeger доступен на http://localhost:16686.
+
+Пользовательские spans:
+
+- `ProductProcessor.process`: `product.process`;
+- `PageFetcher.fetch`: `product.fetch`;
+- `BookPageParser.parseProduct`: `product.parse`;
+- `ProductStorage.save`: `product.save`.
+
+`CrawlService` передаёт текущий OpenTelemetry `Context` в потребители и поток-производитель через `context.wrap(...)`. Благодаря этому фоновые этапы попадают в trace исходного `POST /api/tasks`. Java Agent дополнительно создаёт spans для внешнего HTTP-запроса, Spring Data и JDBC.
+
+`ProductProcessor` записывает в `ActivityLog` отдельную длительность загрузки, разбора и сохранения. Пример реального запроса: загрузка 1 247 мс, разбор 2 мс, сохранение 453 мс.
+
+Проверенная трассировка содержит 13 spans и глубину 6: `POST /api/tasks`, `product.process`, все четыре этапа, внешний `GET`, вызовы репозитория, SQL `SELECT`/`INSERT` и `Transaction.commit`. Длительность всей трассировки: 1,8 секунды. Результат сохранён в `build/telemetry/trace.json`, диаграмма Jaeger: в `build/telemetry/jaeger-trace.png`.
+
+## Материалы по производительности
+
+- Полный отчёт: `docs/performance-report.md`.
+- Презентация: `docs/performance-presentation.pptx` и `docs/performance-presentation.pdf`.
+- Снимки Grafana, VisualVM и Jaeger: `docs/images/`.

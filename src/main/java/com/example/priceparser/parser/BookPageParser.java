@@ -9,6 +9,8 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
 
+import io.opentelemetry.instrumentation.annotations.WithSpan;
+
 @Component
 public class BookPageParser {
 
@@ -29,6 +31,7 @@ public class BookPageParser {
 		return PRODUCT_URL.matcher(url).matches();
 	}
 
+	@WithSpan("product.parse")
 	public ParsedProduct parseProduct(Document document) {
 		if (document.selectFirst(PRODUCT_PAGE_SELECTOR) == null) {
 			throw new IllegalArgumentException("Страница не является страницей товара: " + document.location());

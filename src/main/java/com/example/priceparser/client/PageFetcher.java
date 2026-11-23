@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
+import io.opentelemetry.instrumentation.annotations.WithSpan;
+
 import com.example.priceparser.config.ParserProperties;
 import com.example.priceparser.logging.ActivityLog;
 
@@ -34,6 +36,7 @@ public class PageFetcher {
 		this.maxAttempts = properties.maxFetchAttempts();
 	}
 
+	@WithSpan("product.fetch")
 	public Document fetch(String url) throws IOException {
 		for (int attempt = 1; attempt < maxAttempts; attempt++) {
 			try {
